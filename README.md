@@ -1,6 +1,6 @@
 # projector-dog-game
 
-A single-file HTML game for dogs who love chasing laser pointers. Point a spare projector at the floor (or a wall), map the picture to a patch of it, and glowing burrows appear. The grass rustles, then a squirrel, mole or bunny pops out of one for your dog to pounce on. There is also a roam mode where a critter scampers around the whole area.
+A single-file HTML game for dogs who love chasing laser pointers. Point a spare projector at the floor (or a wall), map the picture to a patch of it, and glowing burrows appear. The grass rustles at a random hole, a squirrel leaps out and sprints across the floor (with decoy turns and sudden freezes) for your dog to chase, then dives into a different hole and vanishes. A moment later it pops out of another one. There are also two other modes: a simple pop-up whack-a-mole style game, and a roam mode.
 
 No install, no dependencies, works offline: open `index.html` in a browser.
 
@@ -14,7 +14,7 @@ No install, no dependencies, works offline: open `index.html` in a browser.
 
 | Key | Action |
 | --- | --- |
-| `M` | Switch game: burrows (pop-up) or roam |
+| `M` | Cycle game: chase (default), burrows (pop-up), roam |
 | `1`-`4` | Critter: squirrel, mole, bunny, glow dot |
 | `Up` / `Down` | Speed |
 | `B` | Background: black or dim forest |
@@ -23,7 +23,7 @@ No install, no dependencies, works offline: open `index.html` in a browser.
 | `F` | Fullscreen |
 | `H` | Hide the on-screen help |
 
-Click or tap the critter to "catch" it. In roam mode, tapping elsewhere scares it off.
+Click or tap the critter to "catch" it (it freezes dizzy for a second, then bolts). In chase and roam modes, tapping elsewhere makes it run faster.
 
 ## Tips for the dog
 

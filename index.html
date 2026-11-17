@@ -51,10 +51,10 @@ const rnd = (a, b) => a + Math.random() * (b - a);
 /* ================= corner-pin (projection mapping) ================= */
 const KEY = 'projector-dog-game.v2';
 let corners = [[.1,.1],[.9,.1],[.9,.9],[.1,.9]];     // fractions of the window: TL, TR, BR, BL
-let state = { speed: 1, game: 'burrow', kind: 'squirrel', bg: 1, rev: 2 };
+let state = { speed: 1, game: 'chase', kind: 'squirrel', bg: 1, rev: 3 };
 try {
   const s = JSON.parse(localStorage.getItem(KEY) || 'null');
-  if (s && s.corners) { corners = s.corners; Object.assign(state, s.state || {}); if (!state.rev){ state.rev = 2; state.bg = 1; } }
+  if (s && s.corners) { corners = s.corners; Object.assign(state, s.state || {}); if (!state.rev){ state.rev = 2; state.bg = 1; } if (state.rev < 3){ state.rev = 3; state.game = 'chase'; } }
   else document.body.classList.add('cal');           // first run: start calibrating
 } catch (e) { document.body.classList.add('cal'); }
 function save(){ try { localStorage.setItem(KEY, JSON.stringify({ corners, state })); } catch (e) {} }
@@ -260,6 +260,55 @@ function drawOrb(g, t){
   g.fillStyle = rad(g, 0, -52, 2, r * 2, [[0,'#fff'],[.22,'#ffe84a'],[1,'rgba(255,200,0,0)']]);
   g.beginPath(); g.arc(0, -52, r * 2, 0, TAU); g.fill();
 }
+/* ---- side-view running squirrel (faces LEFT; origin = feet on the ground) ---- */
+function limb(g, hx, hy, p, mode, front, col){
+  let fx, fy;
+  if (mode === 'air'){ fx = hx + (front ? -34 : 38); fy = front ? -30 : -22; }
+  else if (mode === 'stand'){ fx = hx + (front ? -4 : 4); fy = -3; }
+  else { fx = hx + Math.sin(p) * 28; fy = -3 - Math.max(0, Math.cos(p)) * 20; }
+  const mx = (hx + fx) / 2 + (front ? -6 : 7), my = (hy + fy) / 2 - 2;
+  g.lineCap = 'round'; g.lineJoin = 'round';
+  g.strokeStyle = '#4d220c'; g.lineWidth = 14; g.beginPath(); g.moveTo(hx, hy); g.quadraticCurveTo(mx, my, fx, fy); g.stroke();
+  g.strokeStyle = col; g.lineWidth = 9.5; g.beginPath(); g.moveTo(hx, hy); g.quadraticCurveTo(mx, my, fx, fy); g.stroke();
+  ell(g, fx + (front ? -3 : 3), fy, 9, 5.5, col, 0, '#4d220c');
+}
+function drawSquirrelRun(g, t, ph, mode, blink){
+  const OL = '#4d220c', run = mode === 'run';
+  g.save(); g.translate(0, run ? -Math.abs(Math.sin(ph)) * 8 : 0); g.rotate(run ? Math.sin(ph) * .05 : 0);
+  g.save(); g.translate(46, -62); g.rotate(.45 + Math.sin(t * (run ? 10 : 3)) * .12 - (run ? .3 : 0));       // tail
+  ell(g, 0, -52, 30, 70, lin(g, 0, -124, '#a84d18', '#f4a85c'), 0, OL);
+  ell(g, -6, -64, 10, 40, 'rgba(255,226,172,.5)');
+  g.strokeStyle = 'rgba(110,46,12,.5)'; g.lineWidth = 2.5; g.lineCap = 'round';
+  for (let i = 0; i < 4; i++){ const yy = -18 - i * 26; g.beginPath(); g.moveTo(14, yy); g.quadraticCurveTo(22, yy - 8, 16, yy - 20); g.stroke(); }
+  g.restore();
+  limb(g, -28, -42, ph + .5, mode, true, '#7a3a16');  limb(g, 30, -42, ph + Math.PI * .85 + .5, mode, false, '#7a3a16');   // far legs
+  ell(g, 0, -58, 58, 32, lin(g, -92, -26, '#c76b2b', '#8c4118'), 0, OL);                                         // body
+  ell(g, -4, -45, 38, 15, lin(g, -60, -30, '#fbe6c0', '#ecc891'));                                               // belly
+  ell(g, 28, -58, 24, 26, lin(g, -84, -32, '#bd6126', '#97481a'), 0, OL);                                         // haunch
+  shine(g, -14, -76, 22, 5, .18, -.1);
+  limb(g, -28, -42, ph, mode, true, '#a85a22');  limb(g, 30, -42, ph + Math.PI * .85, mode, false, '#a85a22');    // near legs
+  const hb = mode === 'stand' ? Math.sin(t * 5) * 1.5 : 0;
+  g.save(); g.translate(0, hb);
+  ell(g, -50, -98, 8, 10, '#b85a22', -.3, OL); ell(g, -50, -98, 4, 6, '#f4aa8c', -.3);                           // far ear
+  ell(g, -56, -72, 29, 26, lin(g, -98, -46, '#d98238', '#bd6126'), 0, OL);                                       // head
+  g.strokeStyle = 'rgba(255,232,185,.5)'; g.lineWidth = 3; g.beginPath(); g.ellipse(-56, -72, 26, 23, 0, 3.6, 5.0); g.stroke();
+  ell(g, -78, -64, 15, 12, lin(g, -76, -52, '#fbe6c0', '#f0d09a'));                                              // muzzle
+  ell(g, -90, -67, 4.6, 3.8, '#3a2016'); shine(g, -91.5, -68.5, 1.6, 1, .7);
+  g.fillStyle = '#fff'; g.strokeStyle = '#7a5a40'; g.lineWidth = 1.3; g.beginPath(); g.roundRect(-84, -58, 7, 8, 1.5); g.fill(); g.stroke();
+  ell(g, -42, -96, 10, 14, '#b85a22', -.15, OL); ell(g, -42, -95, 5, 8, '#f4aa8c', -.15);                        // near ear
+  eye(g, -68, -76, 6.5, blink); ell(g, -64, -62, 6, 4, 'rgba(255,120,120,.4)');
+  g.restore(); g.restore();
+}
+/* draws the chase critter at a world position; used both clipped (inside a hole) and on top */
+function drawRunner(g, x, y, sc, face, rot, mode, ph, blink){
+  g.save(); g.translate(x, y); g.scale(sc * (face > 0 ? -1 : 1), sc); g.rotate(rot);
+  g.drawImage(HALO, -150, -215);
+  if (state.kind === 'squirrel') drawSquirrelRun(g, clock, ph, mode, blink);
+  else if (state.kind === 'dot') drawOrb(g, clock);
+  else { g.scale(.8, .8); g.translate(0, -Math.abs(Math.sin(ph)) * 18); KINDS[state.kind].draw(g, clock, { look: face * -.4, blink }); }
+  g.restore();
+}
+
 const KINDS = {
   squirrel: { draw: drawSquirrel, emoji: '🐿️', label: 'Squirrel' },
   mole:     { draw: drawMole,     emoji: '🐭',  label: 'Mole' },
@@ -292,6 +341,7 @@ function pickHole(){
 function popY(h){ return h.y - 80 * h.s * Math.min(1, B.p); }
 function catchIt(){
   if (state.game === 'roam') return roamCatch();
+  if (state.game === 'chase') return chaseCatch();
   if (B.caught > 0 || !B.hole || (B.ph !== 'rise' && B.ph !== 'up')) return;
   B.ph = 'caught'; B.caught = .9; B.p = Math.max(B.p, .8);
   burstStars(B.hole.x, popY(B.hole)); ring(B.hole.x, B.hole.y, '255,230,90'); toast('Caught! Treat time');
@@ -425,8 +475,131 @@ function drawHole(h, withCritter){
     }
   }
   g.restore();
+  drawChaseInside(h);
   g.drawImage(h.rimFront, x - h.ox, y - h.oy);
 }
+/* ================= chase game: pops out of a random hole, runs across the floor, dives into another ================= */
+const C = { ph: 'idle', t: 1, from: null, to: null, last: -1, x: 0, y: 0, rot: 0, face: -1, mode: 'stand', u: 0, pts: [], pi: 0,
+            spd: 0, gph: 0, lift: 0, caught: 0, resume: 'run', boost: 0, inside: null, vis: false, sc: 1, G: null, F: null, prevS: 0 };
+const hScale = y => .78 + .42 * (y / H);
+const lerp = (a, b, t) => a + (b - a) * t;
+const clampP = (x, y) => [Math.min(W - 90, Math.max(90, x)), Math.min(H - 70, Math.max(120, y))];
+const lipOf = h => h.y + h.ry * .45;
+
+function chooseHoles(){
+  C.from = holes[Math.floor(Math.random() * holes.length)];
+  const far = holes.filter(h => h !== C.from && Math.hypot(h.x - C.from.x, h.y - C.from.y) > 280);
+  const pool = far.length ? far : holes.filter(h => h !== C.from);
+  C.to = pool[Math.floor(Math.random() * pool.length)];
+}
+function buildPath(){
+  const A = C.from, T = C.to;
+  C.F = clampP(T.x + rnd(-.3, .3) * T.rx, T.y + T.ry + 46 * T.s);                    // spot in front of the destination hole
+  const mids = [];
+  const n = Math.random() < .6 ? (Math.random() < .35 ? 2 : 1) : 0;
+  let prev = [A.x, A.y];
+  for (let i = 0; i < n; i++){                                                          // decoy turns so it's not a straight line
+    let p, tries = 0;
+    do { p = clampP(rnd(120, W - 120), rnd(170, H - 90)); } while (Math.hypot(p[0] - prev[0], p[1] - prev[1]) < 220 && tries++ < 20);
+    mids.push({ x: p[0], y: p[1], fz: Math.random() < .45 }); prev = p;
+  }
+  const next = mids.length ? mids[0] : { x: C.F[0], y: C.F[1] };
+  const d = Math.hypot(next.x - A.x, next.y - A.y) || 1;
+  C.G = clampP(A.x + (next.x - A.x) / d * (A.rx * .5 + 64 * A.s), A.y + A.ry + 40 * A.s);
+  C.pts = [...mids, { x: C.F[0], y: C.F[1], fz: false }]; C.pi = 0;
+}
+function startLeap(){
+  buildPath(); const A = C.from;
+  C.ph = 'leap'; C.u = 0; C.vis = true; C.mode = 'air';
+  C.face = Math.abs(C.G[0] - A.x) < 8 ? (Math.random() < .5 ? -1 : 1) : (C.G[0] < A.x ? -1 : 1);
+  dirt(A.x, A.y, 16); ring(A.x, A.y, '255,190,60');
+}
+function posLeap(u){
+  const A = C.from, s = A.s, Q = [A.x, lipOf(A) + 150 * s], P = [A.x, A.y - 34 * s];
+  C.sc = s; C.lift = 0;
+  if (u < .5){ const t = 1 - Math.pow(1 - u / .5, 2); C.x = lerp(Q[0], P[0], t); C.y = lerp(Q[1], P[1], t); C.rot = .75; C.inside = A; }
+  else { const t = (u - .5) / .5; C.x = lerp(P[0], C.G[0], t); C.lift = Math.sin(Math.PI * t) * 56 * s;
+         C.y = lerp(P[1], C.G[1], t * t * (3 - 2 * t)) - C.lift; C.rot = lerp(.75, 0, t); C.sc = lerp(s, hScale(C.G[1]), t); C.inside = null; }
+}
+function startDive(){
+  C.ph = 'dive'; C.u = 0; C.mode = 'air'; C.dx = C.x; C.dy = C.y; C.dsc = C.sc;
+  C.face = C.to.x < C.x ? -1 : 1;
+}
+function posDive(u){
+  const T = C.to, s = T.s, P = [T.x, T.y - 30 * s], Q = [T.x, lipOf(T) + 160 * s];
+  C.lift = 0;
+  if (u < .5){ const t = u / .5; C.x = lerp(C.dx, P[0], t); C.lift = Math.sin(Math.PI * t) * 64 * s;
+    C.y = lerp(C.dy, P[1], t) - C.lift; C.rot = lerp(0, -.8, t); C.sc = lerp(C.dsc, s, t); C.inside = null; }
+  else { const t = (u - .5) / .5; C.x = P[0]; C.y = lerp(P[1], Q[1], t * t); C.rot = lerp(-.8, -1.3, t); C.sc = s * (1 - .25 * t); C.inside = T; }
+}
+function updateChase(dt){
+  const s = state.speed;
+  for (const h of holes){
+    h.rustle = Math.max(0, h.rustle - dt * 3);
+    h.glow += (((h === C.from || h === C.to) && C.ph !== 'idle' ? 1 : .35) - h.glow) * Math.min(1, dt * 6);
+  }
+  C.boost = Math.max(0, C.boost - dt);
+  B.blinkT -= dt; if (B.blinkT <= 0){ B.blink = 1; B.blinkT = rnd(1.5, 3.5); } B.blink = Math.max(0, B.blink - dt * 8);
+
+  if (C.ph === 'idle'){
+    C.vis = false; C.t -= dt;
+    if (C.t <= 0){ chooseHoles(); C.ph = 'rustle'; C.t = .65 / s; }
+  } else if (C.ph === 'rustle'){
+    C.from.rustle = 1; C.t -= dt; if (Math.random() < dt * 16) dirt(C.from.x, C.from.y, 1);
+    if (C.t <= 0) startLeap();
+  } else if (C.ph === 'leap'){
+    C.u += dt / (.46 / s); posLeap(Math.min(1, C.u));
+    if (C.u >= 1){ C.ph = 'run'; C.mode = 'run'; C.inside = null; C.spd = rnd(380, 620) * s; C.prevS = 0; }
+  } else if (C.ph === 'run' || C.ph === 'freeze'){
+    if (C.ph === 'freeze'){
+      C.mode = 'stand'; C.t -= dt; C.lift = 0;
+      if (C.t <= 0){ C.ph = 'run'; C.mode = 'run'; C.spd = rnd(420, 680) * s; dirt(C.x, C.y, 5); }
+    } else {
+      const tg = C.pts[C.pi], dx = tg.x - C.x, dy = tg.y - C.y, d = Math.hypot(dx, dy);
+      const speed = C.spd * (C.boost > 0 ? 1.5 : 1);
+      if (d < 12){
+        if (C.pi >= C.pts.length - 1) startDive();
+        else { C.pi++; if (tg.fz){ C.ph = 'freeze'; C.t = rnd(.4, .9) / s; } else C.spd = rnd(380, 680) * s; }
+      } else {
+        const nx = dx / d, ny = dy / d, step = Math.min(d, speed * dt), wob = Math.sin(clock * 11) * 55;
+        C.x += nx * step - ny * wob * dt; C.y += ny * step + nx * wob * dt;
+        [C.x, C.y] = clampP(C.x, C.y);
+        if (Math.abs(nx) > .2) C.face = nx > 0 ? 1 : -1;
+        C.gph += dt * speed / 46; C.rot = 0; C.lift = 0; C.sc = hScale(C.y);
+        const sn = Math.sin(C.gph); if (sn * C.prevS < 0 && Math.random() < .8) dirt(C.x - C.face * 30, C.y, 1, '#c9a46a'); C.prevS = sn;
+      }
+    }
+  } else if (C.ph === 'dive'){
+    C.u += dt / (.5 / s); posDive(Math.min(1, C.u));
+    if (C.u >= 1){ C.ph = 'idle'; C.vis = false; C.inside = null; C.t = rnd(.7, 2.3) / s; C.last = C.to.id;
+                   dirt(C.to.x, C.to.y, 10); ring(C.to.x, C.to.y, '255,190,60'); C.to.rustle = 1; }
+  } else if (C.ph === 'caught'){
+    C.caught -= dt; if (C.caught <= 0){ C.ph = C.resume; C.mode = C.resume === 'freeze' ? 'stand' : 'run'; C.spd = 620 * s; }
+  }
+}
+function chaseCatch(){
+  if (!C.vis || C.inside || (C.ph !== 'run' && C.ph !== 'freeze')) return;
+  C.resume = C.ph === 'freeze' ? 'run' : C.ph; C.ph = 'caught'; C.caught = 1.0; C.mode = 'stand';
+  burstStars(C.x, C.y - 60 * C.sc); ring(C.x, C.y, '255,230,90'); toast('Caught! Treat time');
+}
+function drawChaseTop(){
+  if (!C.vis || C.inside) return;
+  const g = ctx;
+  g.fillStyle = 'rgba(0,0,0,.32)'; g.beginPath(); g.ellipse(C.x, C.y + C.lift, 54 * C.sc, 11 * C.sc, 0, 0, TAU); g.fill();    // ground shadow
+  drawRunner(g, C.x, C.y, C.sc, C.face, C.rot, C.mode, C.gph, B.blink);
+  if (C.ph === 'caught'){
+    for (let i = 0; i < 4; i++){ const a = clock * 6 + i * TAU / 4, sx = C.x + Math.cos(a) * 46 * C.sc, sy = C.y - 150 * C.sc + Math.sin(a) * 12;
+      g.fillStyle = 'rgba(255,176,0,.35)'; star(g, sx, sy, 20, a); g.fillStyle = '#ffd84a'; star(g, sx, sy, 11, a); }
+  }
+}
+function drawChaseInside(h){                                                              // the part of the squirrel that is still inside hole h
+  if (!C.vis || C.inside !== h) return;
+  const g = ctx; g.save();
+  g.beginPath(); g.rect(h.x - h.rx - 90, h.y - 420, 2 * h.rx + 180, 420 + h.ry * .45); g.clip();
+  drawRunner(g, C.x, C.y, C.sc, C.face, C.rot, C.mode, C.gph, B.blink);
+  g.restore();
+}
+
 /* ================= roam mode (a critter that scampers around the whole area) ================= */
 const R = { x: W/2, y: H/2, tx: W/2, ty: H/2, st: 'idle', t: 1, sp: 0, face: -1, ph: 0, caught: 0, dir: 1 };
 function rPick(){ const m = 130; let t = 0, x, y;
@@ -502,24 +675,26 @@ function draw(){
   ctx.clearRect(0, 0, W, H);
   if (state.bg % 2 === 1) ctx.drawImage(GROUND, 0, 0);
   drawFlies();
-  if (state.game === 'burrow'){
-    for (const h of holesSorted) drawHole(h, h === B.hole && B.ph !== 'idle' && B.ph !== 'rustle');
+  if (state.game !== 'roam'){
+    for (const h of holesSorted) drawHole(h, state.game === 'burrow' && h === B.hole && B.ph !== 'idle' && B.ph !== 'rustle');
   } else drawRoam();
+  if (state.game === 'chase') drawChaseTop();
   drawFx();
 }
 const holesSorted = [...holes].sort((a, b) => a.y - b.y);
 function update(dt){
   clock += dt; updateFx(dt); updateFlies(dt);
-  state.game === 'burrow' ? updateBurrow(dt) : updateRoam(dt);
+  state.game === 'burrow' ? updateBurrow(dt) : state.game === 'chase' ? updateChase(dt) : updateRoam(dt);
 }
 
 /* ================= UI ================= */
+const GAMES = { chase: 'Chase (pop out, run, dive)', burrow: 'Burrows (pop-up)', roam: 'Roam' };
 let toastTimer;
 function toast(t){ toastEl.textContent = t; toastEl.classList.add('on'); clearTimeout(toastTimer);
                    toastTimer = setTimeout(() => toastEl.classList.remove('on'), 1600); }
 function setHud(){
-  hud.innerHTML = `<b>${state.game === 'burrow' ? 'Burrows' : 'Roam'}</b> · ${KINDS[state.kind].label} · speed ${state.speed.toFixed(1)}×<br>
-    M game mode · 1–4 critter · ↑/↓ speed · B background · R catch + reward · C calibrate · F fullscreen · H hide this<br>
+  hud.innerHTML = `<b>${GAMES[state.game]}</b> · ${KINDS[state.kind].label} · speed ${state.speed.toFixed(1)}×<br>
+    M mode · 1–4 critter · ↑/↓ speed · B background · R catch + reward · C calibrate · F fullscreen · H hide this<br>
     Tap the critter to “catch” it.`;
 }
 let hudTimer;
@@ -538,7 +713,7 @@ addEventListener('keydown', e => {
   if (cal && '1234'.includes(k) && e.altKey){ sel = +k - 1; markSel(); return; }
   if (cal && k === 'Escape'){ setCal(false); return; }
   if (/^[1-4]$/.test(k)){ state.kind = KIND_ORDER[+k - 1]; toast(KINDS[state.kind].label); }
-  else if (k === 'm' || k === 'M'){ state.game = state.game === 'burrow' ? 'roam' : 'burrow'; toast(state.game === 'burrow' ? 'Burrows' : 'Roam'); }
+  else if (k === 'm' || k === 'M'){ const o = ['chase', 'burrow', 'roam']; state.game = o[(o.indexOf(state.game) + 1) % 3]; toast(GAMES[state.game]); }
   else if (k === 'ArrowUp' || k === '+' || k === '='){ state.speed = Math.min(2.5, +(state.speed + .1).toFixed(1)); toast(`Speed ${state.speed.toFixed(1)}×`); }
   else if (k === 'ArrowDown' || k === '-'){ state.speed = Math.max(.3, +(state.speed - .1).toFixed(1)); toast(`Speed ${state.speed.toFixed(1)}×`); }
   else if (k === 'b' || k === 'B'){ state.bg++; }
@@ -550,7 +725,9 @@ addEventListener('keydown', e => {
 addEventListener('pointerdown', e => {
   if (document.body.classList.contains('cal')) return;
   const [sx, sy] = screenToStage(e.clientX, e.clientY);
-  if (state.game === 'burrow'){
+  if (state.game === 'chase'){
+    if (C.vis && !C.inside && Math.hypot(sx - C.x, sy - (C.y - 50 * C.sc)) < 130 * C.sc) chaseCatch(); else { C.boost = 1.2; ring(sx, sy); }
+  } else if (state.game === 'burrow'){
     if (B.hole && (B.ph === 'rise' || B.ph === 'up') && Math.hypot(sx - B.hole.x, sy - popY(B.hole)) < 120 * B.hole.s) catchIt();
     else ring(sx, sy);
   } else {
@@ -566,12 +743,12 @@ addEventListener('pointermove', () => {
 addEventListener('resize', applyTransform);
 
 if (!KINDS[state.kind]) state.kind = 'squirrel';
-if (state.game !== 'roam') state.game = 'burrow';
+if (!GAMES[state.game]) state.game = 'chase';
 if (!document.body.classList.contains('cal')) document.body.classList.add('nocursor');
 applyTransform(); setHud(); showHud();
 let last = performance.now();
 (function loop(now){ const dt = Math.min(.05, (now - last) / 1000); last = now; update(dt); draw(); requestAnimationFrame(loop); })(last);
-window.__dbg = { B, holes, state };   // handy for poking at it in devtools
+window.__dbg = { B, C, holes, state };   // handy for poking at it in devtools
 })();
 </script>
 </body>
