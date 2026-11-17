@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dog Chase</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#fff;user-select:none;-webkit-user-select:none}
+  #stage{position:absolute;left:0;top:0;width:1280px;height:720px;transform-origin:0 0}
+  #stage canvas{position:absolute;left:0;top:0;width:1280px;height:720px}
+  #grid{display:none}
+  .h{position:absolute;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;border:3px solid #ffd400;
+     background:rgba(255,212,0,.22);cursor:grab;touch-action:none;display:none;box-sizing:border-box;
+     color:#ffd400;font:700 16px/40px system-ui;text-align:center}
+  .h.sel{background:rgba(255,212,0,.65);color:#000}
+  body.cal .h{display:block}
+  body.cal #grid{display:block}
+  body.nocursor{cursor:none}
+  #hud{position:fixed;left:16px;bottom:14px;font-size:14px;line-height:1.5;color:#9aa;background:rgba(0,0,0,.55);
+       padding:8px 12px;border-radius:8px;transition:opacity .6s;pointer-events:none;max-width:520px}
+  #hud.hide{opacity:0}
+  #toast{position:fixed;right:16px;top:14px;font-size:18px;color:#ffd400;background:rgba(0,0,0,.6);padding:6px 12px;
+         border-radius:8px;opacity:0;transition:opacity .3s;pointer-events:none}
+  #toast.on{opacity:1}
+  #calmsg{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;font-size:20px;color:#ffd400;
+          pointer-events:none;display:none;text-shadow:0 0 8px #000}
+  body.cal #calmsg{display:block}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game" width="1280" height="720"></canvas>
+  <canvas id="grid" width="1280" height="720"></canvas>
+</div>
+<div id="handles"></div>
+<div id="calmsg">Drag the 4 yellow dots onto the corners of the area you want to use.<br>
+  Arrow keys nudge the selected dot (Shift = bigger steps). Press <b>C</b> or <b>Enter</b> when it fits.</div>
+<div id="hud"></div>
+<div id="toast"></div>
+
+<script>
+(() => {
+const W = 1280, H = 720;
+const stage = document.getElementById('stage');
+const cv = document.getElementById('game'), ctx = cv.getContext('2d');
+const gcv = document.getElementById('grid'), gctx = gcv.getContext('2d');
+const hud = document.getElementById('hud'), toastEl = document.getElementById('toast');
+const handlesEl = document.getElementById('handles');
+
+/* ---------- corner-pin (projection mapping) ---------- */
+// corners stored as fractions of the window, order: TL, TR, BR, BL
+const KEY = 'dogchase.v1';
+let corners = [[.1,.1],[.9,.1],[.9,.9],[.1,.9]];
+let state = { speed: 1, mode: 'squirrel', bg: 0 };
+try {
+  const s = JSON.parse(localStorage.getItem(KEY) || 'null');
+  if (s && s.corners) { corners = s.corners; Object.assign(state, s.state || {}); }
+  else document.body.classList.add('cal');       // first run: start in calibration
+} catch (e) { document.body.classList.add('cal'); }
+function save(){ try { localStorage.setItem(KEY, JSON.stringify({ corners, state })); } catch (e) {} }
+
+const px = () => corners.map(([x,y]) => [x*innerWidth, y*innerHeight]);
+
+function homography(src, dst){            // 4 point pairs -> 8 coefficients (h33 = 1)
+  const A = [];
+  for (let i = 0; i < 4; i++){
+    const [x,y] = src[i], [u,v] = dst[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y,u]);
+    A.push([0,0,0,x,y,1,-v*x,-v*y,v]);
+  }
+  const n = 8;
+  for (let c = 0; c < n; c++){
+    let p = c;
+    for (let r = c+1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]];
+    for (let r = 0; r < n; r++){
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k <= n; k++) A[r][k] -= f * A[c][k];
+    }
+  }
+  return A.map((row,i) => row[n] / row[i]);
+}
+const RECT = [[0,0],[W,0],[W,H],[0,H]];
+let toStage = null;                        // screen -> stage mapping
+
+function applyTransform(){
+  const d = px();
+  const h = homography(RECT, d);
+  stage.style.transform =
+    `matrix3d(${h[0]},${h[3]},0,${h[6]}, ${h[1]},${h[4]},0,${h[7]}, 0,0,1,0, ${h[2]},${h[5]},0,1)`;
+  toStage = homography(d, RECT);
+  handles.forEach((el,i) => { el.style.left = d[i][0]+'px'; el.style.top = d[i][1]+'px'; });
+  drawGrid();
+}
+function screenToStage(x, y){
+  const h = toStage, w = h[6]*x + h[7]*y + 1;
+  return [(h[0]*x + h[1]*y + h[2]) / w, (h[3]*x + h[4]*y + h[5]) / w];
+}
+
+/* ---------- calibration handles ---------- */
+let sel = 0;
+const handles = [0,1,2,3].map(i => {
+  const el = document.createElement('div');
+  el.className = 'h'; el.textContent = i+1;
+  handlesEl.appendChild(el);
+  el.addEventListener('pointerdown', e => {
+    sel = i; markSel(); el.setPointerCapture(e.pointerId); el.style.cursor = 'grabbing';
+    const move = ev => {
+      corners[i] = [Math.min(1.2, Math.max(-.2, ev.clientX / innerWidth)),
+                    Math.min(1.2, Math.max(-.2, ev.clientY / innerHeight))];
+      applyTransform();
+    };
+    const up = () => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up);
+                       el.style.cursor = 'grab'; save(); };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+    e.preventDefault(); e.stopPropagation();
+  });
+  return el;
+});
+function markSel(){ handles.forEach((el,i) => el.classList.toggle('sel', i === sel)); }
+markSel();
+
+function drawGrid(){
+  const g = gctx; g.clearRect(0,0,W,H);
+  g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0,0,W,H);
+  g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 2;
+  for (let x = 0; x <= W; x += 80){ g.beginPath(); g.moveTo(x,0); g.lineTo(x,H); g.stroke(); }
+  for (let y = 0; y <= H; y += 80){ g.beginPath(); g.moveTo(0,y); g.lineTo(W,y); g.stroke(); }
+  g.strokeStyle = '#ffd400'; g.lineWidth = 8; g.strokeRect(4,4,W-8,H-8);
+  g.lineWidth = 2; g.beginPath(); g.moveTo(0,0); g.lineTo(W,H); g.moveTo(W,0); g.lineTo(0,H); g.stroke();
+  g.fillStyle = '#ffd400'; g.font = '700 40px system-ui'; g.textAlign = 'left'; g.textBaseline = 'top';
+  g.fillText('1', 16, 14); g.textAlign = 'right'; g.fillText('2', W-16, 14);
+  g.textBaseline = 'bottom'; g.fillText('3', W-16, H-14); g.textAlign = 'left'; g.fillText('4', 16, H-14);
+}
+
+/* ---------- the critter ---------- */
+const MODES = {
+  squirrel: { emoji: '🐿️', size: 170, speed: 1.0, label: 'Squirrel' },
+  mouse:    { emoji: '🐭',  size: 130, speed: 1.15, label: 'Mouse' },
+  bug:      { emoji: '🪲',  size: 110, speed: 0.9, label: 'Beetle' },
+  butterfly:{ emoji: '🦋',  size: 150, speed: 0.7, label: 'Butterfly', flutter: true },
+  dot:      { emoji: null,  size: 46,  speed: 1.0, label: 'Glow dot' },
+};
+const ORDER = Object.keys(MODES);
+const c = { x: W/2, y: H/2, tx: W/2, ty: H/2, st: 'idle', t: 1, sp: 0, face: -1, ph: 0, caught: 0, dir: 0 };
+const puffs = [], stars = [];
+let clock = 0;
+
+function pickTarget(){
+  const m = 130; let tries = 0, x, y;
+  do { x = m + Math.random()*(W-2*m); y = m + Math.random()*(H-2*m); }
+  while (Math.hypot(x-c.x, y-c.y) < 280 && tries++ < 25);
+  c.tx = x; c.ty = y;
+}
+function puff(n = 7){
+  for (let i = 0; i < n; i++)
+    puffs.push({ x: c.x + (Math.random()-.5)*50, y: c.y + 40 + Math.random()*20,
+                 vx: (Math.random()-.5)*90, vy: -Math.random()*50, life: 1, r: 8 + Math.random()*14 });
+}
+function startDash(){
+  pickTarget();
+  c.st = 'dash';
+  c.sp = (420 + Math.random()*460) * state.speed * MODES[state.mode].speed;
+  c.dir = Math.random() < .5 ? -1 : 1;
+  puff();
+}
+function flee(fx, fy){                       // dart away from a point (human tap/click)
+  const a = Math.atan2(c.y - fy, c.x - fx) + (Math.random()-.5)*.8, d = 420 + Math.random()*250;
+  c.tx = Math.min(W-110, Math.max(110, c.x + Math.cos(a)*d));
+  c.ty = Math.min(H-110, Math.max(110, c.y + Math.sin(a)*d));
+  c.st = 'dash'; c.sp = 950 * state.speed * MODES[state.mode].speed; puff(10);
+}
+function caught(){                           // reward moment: poof, then it pops up elsewhere
+  if (c.caught > 0) return;
+  c.caught = 1.4;
+  for (let i = 0; i < 14; i++) stars.push({ x: c.x, y: c.y, a: Math.random()*6.28, v: 120+Math.random()*220, life: 1 });
+  toast('Caught! Treat time 🦴');
+}
+
+function update(dt){
+  clock += dt;
+  if (c.caught > 0){
+    c.caught -= dt;
+    if (c.caught <= 0){ c.x = 130 + Math.random()*(W-260); c.y = 130 + Math.random()*(H-260); c.st = 'idle'; c.t = 1.2; puff(10); }
+  } else if (c.st === 'idle'){
+    c.t -= dt;
+    if (c.t <= 0) startDash();
+  } else {
+    const dx = c.tx - c.x, dy = c.ty - c.y, d = Math.hypot(dx, dy);
+    if (d < 14){
+      c.st = 'idle';
+      c.t = Math.random() < .3 ? .12 : .35 + Math.random()*1.5;   // sometimes a quick feint, usually a pause
+    } else {
+      const ease = Math.min(1, .3 + d / 220);
+      const step = Math.min(d, c.sp * ease * dt);
+      let nx = dx/d, ny = dy/d;
+      const m = MODES[state.mode];
+      const wob = (m.flutter ? 150 : 55) * Math.sin(clock * (m.flutter ? 9 : 16)) * c.dir;
+      c.x += nx*step + (-ny)*wob*dt;
+      c.y += ny*step + ( nx)*wob*dt;
+      if (Math.abs(nx) > .25) c.face = nx > 0 ? 1 : -1;
+      c.ph += dt * 22;
+    }
+  }
+  c.x = Math.min(W-60, Math.max(60, c.x)); c.y = Math.min(H-60, Math.max(60, c.y));
+  for (const p of puffs){ p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt*1.6; }
+  for (const s of stars){ s.x += Math.cos(s.a)*s.v*dt; s.y += Math.sin(s.a)*s.v*dt; s.life -= dt*1.2; }
+  while (puffs.length && puffs[0].life <= 0) puffs.shift();
+  while (stars.length && stars[0].life <= 0) stars.shift();
+}
+
+const BGS = [null, ['#0d1f12', '#050b07']];            // black, dim forest
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const bg = BGS[state.bg % BGS.length];
+  if (bg){
+    const g = ctx.createRadialGradient(W/2,H/2,80,W/2,H/2,W*.65);
+    g.addColorStop(0,bg[0]); g.addColorStop(1,bg[1]); ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  }
+  for (const p of puffs){
+    ctx.globalAlpha = Math.max(0, p.life) * .35; ctx.fillStyle = '#cdb98a';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1.4 - p.life*.4), 0, 6.283); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  const m = MODES[state.mode];
+  if (c.caught <= 0){
+    const moving = c.st === 'dash';
+    const bob = moving ? Math.abs(Math.sin(c.ph)) * 14 : Math.sin(clock*7) * 2;
+    ctx.save(); ctx.translate(c.x, c.y);
+    if (m.emoji){
+      // projectors can't show black: a soft warm halo makes dark emoji pop on a wall
+      const hg = ctx.createRadialGradient(0,-bob,m.size*.1,0,-bob,m.size*.85);
+      hg.addColorStop(0,'rgba(255,236,190,.85)'); hg.addColorStop(.55,'rgba(255,220,150,.45)'); hg.addColorStop(1,'rgba(255,220,150,0)');
+      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(0,-bob,m.size*.85,0,6.283); ctx.fill();
+      ctx.translate(0, -bob);
+      ctx.rotate(moving ? Math.sin(c.ph*.5)*.07 : 0);
+      ctx.scale(-c.face, 1);                           // emoji faces left by default
+      if (!moving) ctx.scale(1 + Math.sin(clock*9)*.015, 1);
+      ctx.font = `${m.size}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(m.emoji, 0, 0);
+    } else {
+      const r = m.size;
+      const g = ctx.createRadialGradient(0,0,2,0,0,r);
+      g.addColorStop(0,'#fff'); g.addColorStop(.25,'#ffe84a'); g.addColorStop(1,'rgba(255,200,0,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,r,0,6.283); ctx.fill();
+    }
+    ctx.restore();
+  }
+  for (const s of stars){
+    ctx.globalAlpha = Math.max(0, s.life); ctx.font = '44px "Apple Color Emoji","Segoe UI Emoji",sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('⭐', s.x, s.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- UI: keys, taps, HUD ---------- */
+let toastTimer;
+function toast(t){ toastEl.textContent = t; toastEl.classList.add('on'); clearTimeout(toastTimer);
+                   toastTimer = setTimeout(() => toastEl.classList.remove('on'), 1600); }
+function setHud(){
+  hud.innerHTML = `<b>${MODES[state.mode].label}</b> · speed ${state.speed.toFixed(2)}×<br>
+    1–5 critter · ↑/↓ speed · B background · R catch + reward · C calibrate · F fullscreen · H hide this<br>
+    Tap the screen to scare it off; tap the critter to “catch” it.`;
+}
+let hudTimer;
+function showHud(){ hud.classList.remove('hide'); clearTimeout(hudTimer);
+                    hudTimer = setTimeout(() => hud.classList.add('hide'), 6000); }
+
+function setCal(on){
+  document.body.classList.toggle('cal', on);
+  document.body.classList.toggle('nocursor', !on);
+  if (!on) save();
+}
+
+addEventListener('keydown', e => {
+  const k = e.key, cal = document.body.classList.contains('cal');
+  if (k === 'c' || k === 'C' || (k === 'Enter' && cal)){ setCal(!cal); return; }
+  if (cal && k.startsWith('Arrow')){
+    const st = (e.shiftKey ? 10 : 1);
+    const dx = k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0;
+    const dy = k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0;
+    corners[sel][0] += dx / innerWidth; corners[sel][1] += dy / innerHeight;
+    applyTransform(); save(); e.preventDefault(); return;
+  }
+  if (cal && '1234'.includes(k) && e.altKey){ sel = +k - 1; markSel(); return; }
+  if (/^[1-5]$/.test(k) && !cal){ state.mode = ORDER[+k - 1]; toast(MODES[state.mode].label); save(); }
+  else if (k === 'ArrowUp' || k === '+' || k === '='){ state.speed = Math.min(2.5, state.speed + .1); toast(`Speed ${state.speed.toFixed(1)}×`); save(); }
+  else if (k === 'ArrowDown' || k === '-'){ state.speed = Math.max(.3, state.speed - .1); toast(`Speed ${state.speed.toFixed(1)}×`); save(); }
+  else if (k === 'b' || k === 'B'){ state.bg++; save(); }
+  else if (k === 'r' || k === 'R'){ caught(); }
+  else if (k === 'f' || k === 'F'){ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+  else if (k === 'h' || k === 'H'){ hud.classList.toggle('hide'); clearTimeout(hudTimer); return; }
+  else if (k === 'Escape' && cal){ setCal(false); }
+  setHud(); showHud();
+});
+
+addEventListener('pointerdown', e => {
+  if (document.body.classList.contains('cal')) return;
+  const [sx, sy] = screenToStage(e.clientX, e.clientY);
+  if (Math.hypot(sx - c.x, sy - c.y) < 130) caught(); else flee(sx, sy);
+});
+let moveTimer;
+addEventListener('pointermove', () => {
+  if (document.body.classList.contains('cal')) return;
+  document.body.classList.remove('nocursor'); clearTimeout(moveTimer);
+  moveTimer = setTimeout(() => document.body.classList.add('nocursor'), 1500);
+});
+addEventListener('resize', applyTransform);
+
+/* ---------- go ---------- */
+if (!ORDER.includes(state.mode)) state.mode = 'squirrel';
+if (!document.body.classList.contains('cal')) document.body.classList.add('nocursor');
+applyTransform(); setHud(); showHud();
+let last = performance.now();
+(function loop(now){
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  update(dt); draw(); requestAnimationFrame(loop);
+})(last);
+})();
+</script>
+</body>
+</html>
