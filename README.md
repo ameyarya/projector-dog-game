@@ -1,6 +1,6 @@
 # projector-dog-game
 
-A single-file HTML game for dogs who love chasing laser pointers. Point a spare projector at a wall (or floor), map the picture to a patch of it, and a squirrel scampers around for your dog to chase.
+A single-file HTML game for dogs who love chasing laser pointers. Point a spare projector at the floor (or a wall), map the picture to a patch of it, and glowing burrows appear. The grass rustles, then a squirrel, mole or bunny pops out of one for your dog to pounce on. There is also a roam mode where a critter scampers around the whole area.
 
 No install, no dependencies, works offline: open `index.html` in a browser.
 
@@ -14,15 +14,16 @@ No install, no dependencies, works offline: open `index.html` in a browser.
 
 | Key | Action |
 | --- | --- |
-| `1`-`5` | Critter: squirrel, mouse, beetle, butterfly, glow dot |
+| `M` | Switch game: burrows (pop-up) or roam |
+| `1`-`4` | Critter: squirrel, mole, bunny, glow dot |
 | `Up` / `Down` | Speed |
 | `B` | Background: black or dim forest |
-| `R` | "Catch" the critter: poof, stars, it respawns elsewhere (treat moment) |
+| `R` | "Catch" the critter: dizzy stars, it ducks back down (treat moment) |
 | `C` | Toggle calibration |
 | `F` | Fullscreen |
 | `H` | Hide the on-screen help |
 
-Click or tap: the critter darts away from the tap, or is "caught" if you tap it.
+Click or tap the critter to "catch" it. In roam mode, tapping elsewhere scares it off.
 
 ## Tips for the dog
 

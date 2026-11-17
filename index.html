@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Dog Chase</title>
+<title>Projector Dog Game</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,-apple-system,sans-serif;color:#fff;user-select:none;-webkit-user-select:none}
@@ -17,7 +17,7 @@
   body.cal #grid{display:block}
   body.nocursor{cursor:none}
   #hud{position:fixed;left:16px;bottom:14px;font-size:14px;line-height:1.5;color:#9aa;background:rgba(0,0,0,.55);
-       padding:8px 12px;border-radius:8px;transition:opacity .6s;pointer-events:none;max-width:520px}
+       padding:8px 12px;border-radius:8px;transition:opacity .6s;pointer-events:none;max-width:560px}
   #hud.hide{opacity:0}
   #toast{position:fixed;right:16px;top:14px;font-size:18px;color:#ffd400;background:rgba(0,0,0,.6);padding:6px 12px;
          border-radius:8px;opacity:0;transition:opacity .3s;pointer-events:none}
@@ -40,28 +40,28 @@
 
 <script>
 (() => {
-const W = 1280, H = 720;
+const W = 1280, H = 720, TAU = Math.PI * 2;
 const stage = document.getElementById('stage');
 const cv = document.getElementById('game'), ctx = cv.getContext('2d');
 const gcv = document.getElementById('grid'), gctx = gcv.getContext('2d');
 const hud = document.getElementById('hud'), toastEl = document.getElementById('toast');
 const handlesEl = document.getElementById('handles');
+const rnd = (a, b) => a + Math.random() * (b - a);
 
-/* ---------- corner-pin (projection mapping) ---------- */
-// corners stored as fractions of the window, order: TL, TR, BR, BL
-const KEY = 'dogchase.v1';
-let corners = [[.1,.1],[.9,.1],[.9,.9],[.1,.9]];
-let state = { speed: 1, mode: 'squirrel', bg: 0 };
+/* ================= corner-pin (projection mapping) ================= */
+const KEY = 'projector-dog-game.v2';
+let corners = [[.1,.1],[.9,.1],[.9,.9],[.1,.9]];     // fractions of the window: TL, TR, BR, BL
+let state = { speed: 1, game: 'burrow', kind: 'squirrel', bg: 0 };
 try {
   const s = JSON.parse(localStorage.getItem(KEY) || 'null');
   if (s && s.corners) { corners = s.corners; Object.assign(state, s.state || {}); }
-  else document.body.classList.add('cal');       // first run: start in calibration
+  else document.body.classList.add('cal');           // first run: start calibrating
 } catch (e) { document.body.classList.add('cal'); }
 function save(){ try { localStorage.setItem(KEY, JSON.stringify({ corners, state })); } catch (e) {} }
 
 const px = () => corners.map(([x,y]) => [x*innerWidth, y*innerHeight]);
 
-function homography(src, dst){            // 4 point pairs -> 8 coefficients (h33 = 1)
+function homography(src, dst){                        // 4 point pairs -> 8 coefficients (h33 = 1)
   const A = [];
   for (let i = 0; i < 4; i++){
     const [x,y] = src[i], [u,v] = dst[i];
@@ -82,7 +82,7 @@ function homography(src, dst){            // 4 point pairs -> 8 coefficients (h3
   return A.map((row,i) => row[n] / row[i]);
 }
 const RECT = [[0,0],[W,0],[W,H],[0,H]];
-let toStage = null;                        // screen -> stage mapping
+let toStage = null;
 
 function applyTransform(){
   const d = px();
@@ -98,7 +98,6 @@ function screenToStage(x, y){
   return [(h[0]*x + h[1]*y + h[2]) / w, (h[3]*x + h[4]*y + h[5]) / w];
 }
 
-/* ---------- calibration handles ---------- */
 let sel = 0;
 const handles = [0,1,2,3].map(i => {
   const el = document.createElement('div');
@@ -134,172 +133,343 @@ function drawGrid(){
   g.textBaseline = 'bottom'; g.fillText('3', W-16, H-14); g.textAlign = 'left'; g.fillText('4', 16, H-14);
 }
 
-/* ---------- the critter ---------- */
-const MODES = {
-  squirrel: { emoji: '🐿️', size: 170, speed: 1.0, label: 'Squirrel' },
-  mouse:    { emoji: '🐭',  size: 130, speed: 1.15, label: 'Mouse' },
-  bug:      { emoji: '🪲',  size: 110, speed: 0.9, label: 'Beetle' },
-  butterfly:{ emoji: '🦋',  size: 150, speed: 0.7, label: 'Butterfly', flutter: true },
-  dot:      { emoji: null,  size: 46,  speed: 1.0, label: 'Glow dot' },
-};
-const ORDER = Object.keys(MODES);
-const c = { x: W/2, y: H/2, tx: W/2, ty: H/2, st: 'idle', t: 1, sp: 0, face: -1, ph: 0, caught: 0, dir: 0 };
-const puffs = [], stars = [];
+/* ================= shared effects ================= */
+const parts = [];     // dirt / sparkle specks
+const rings = [];     // expanding glow rings
+const stars = [];     // gold stars on a catch
 let clock = 0;
 
-function pickTarget(){
-  const m = 130; let tries = 0, x, y;
-  do { x = m + Math.random()*(W-2*m); y = m + Math.random()*(H-2*m); }
-  while (Math.hypot(x-c.x, y-c.y) < 280 && tries++ < 25);
-  c.tx = x; c.ty = y;
-}
-function puff(n = 7){
+function dirt(x, y, n, col = '#e0b070'){
   for (let i = 0; i < n; i++)
-    puffs.push({ x: c.x + (Math.random()-.5)*50, y: c.y + 40 + Math.random()*20,
-                 vx: (Math.random()-.5)*90, vy: -Math.random()*50, life: 1, r: 8 + Math.random()*14 });
+    parts.push({ x: x + rnd(-40,40), y: y + rnd(-6,10), vx: rnd(-130,130), vy: rnd(-260,-90), life: 1, r: rnd(3,8), col });
 }
-function startDash(){
-  pickTarget();
-  c.st = 'dash';
-  c.sp = (420 + Math.random()*460) * state.speed * MODES[state.mode].speed;
-  c.dir = Math.random() < .5 ? -1 : 1;
-  puff();
+function ring(x, y, col = '255,200,60'){ rings.push({ x, y, r: 20, life: 1, col }); }
+function burstStars(x, y){
+  for (let i = 0; i < 12; i++) stars.push({ x, y, a: rnd(0, TAU), v: rnd(140, 330), life: 1, rot: rnd(0, TAU) });
 }
-function flee(fx, fy){                       // dart away from a point (human tap/click)
-  const a = Math.atan2(c.y - fy, c.x - fx) + (Math.random()-.5)*.8, d = 420 + Math.random()*250;
-  c.tx = Math.min(W-110, Math.max(110, c.x + Math.cos(a)*d));
-  c.ty = Math.min(H-110, Math.max(110, c.y + Math.sin(a)*d));
-  c.st = 'dash'; c.sp = 950 * state.speed * MODES[state.mode].speed; puff(10);
+function star(g, x, y, r, rot){
+  g.beginPath();
+  for (let i = 0; i < 10; i++){
+    const a = rot + i * Math.PI / 5 - Math.PI / 2, rr = i % 2 ? r * .45 : r;
+    g[i ? 'lineTo' : 'moveTo'](x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+  }
+  g.closePath(); g.fill();
 }
-function caught(){                           // reward moment: poof, then it pops up elsewhere
-  if (c.caught > 0) return;
-  c.caught = 1.4;
-  for (let i = 0; i < 14; i++) stars.push({ x: c.x, y: c.y, a: Math.random()*6.28, v: 120+Math.random()*220, life: 1 });
-  toast('Caught! Treat time 🦴');
+function updateFx(dt){
+  for (const p of parts){ p.x += p.vx*dt; p.y += p.vy*dt; p.vy += 700*dt; p.life -= dt*1.5; }
+  for (const r of rings){ r.r += 260*dt; r.life -= dt*1.3; }
+  for (const s of stars){ s.x += Math.cos(s.a)*s.v*dt; s.y += Math.sin(s.a)*s.v*dt; s.v *= .985; s.life -= dt*1.1; s.rot += dt*5; }
+  for (const a of [parts, rings, stars]) for (let i = a.length - 1; i >= 0; i--) if (a[i].life <= 0) a.splice(i, 1);
+}
+function drawFx(){
+  for (const p of parts){ ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill(); }
+  for (const r of rings){ ctx.globalAlpha = Math.max(0, r.life) * .8; ctx.strokeStyle = `rgb(${r.col})`; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.ellipse(r.x, r.y, r.r, r.r * .4, 0, 0, TAU); ctx.stroke(); }
+  ctx.fillStyle = '#ffd84a'; ctx.shadowColor = '#ffb000'; ctx.shadowBlur = 14;
+  for (const s of stars){ ctx.globalAlpha = Math.max(0, s.life); star(ctx, s.x, s.y, 20, s.rot); }
+  ctx.shadowBlur = 0; ctx.globalAlpha = 1;
 }
 
-function update(dt){
-  clock += dt;
-  if (c.caught > 0){
-    c.caught -= dt;
-    if (c.caught <= 0){ c.x = 130 + Math.random()*(W-260); c.y = 130 + Math.random()*(H-260); c.st = 'idle'; c.t = 1.2; puff(10); }
-  } else if (c.st === 'idle'){
-    c.t -= dt;
-    if (c.t <= 0) startDash();
-  } else {
-    const dx = c.tx - c.x, dy = c.ty - c.y, d = Math.hypot(dx, dy);
-    if (d < 14){
-      c.st = 'idle';
-      c.t = Math.random() < .3 ? .12 : .35 + Math.random()*1.5;   // sometimes a quick feint, usually a pause
-    } else {
-      const ease = Math.min(1, .3 + d / 220);
-      const step = Math.min(d, c.sp * ease * dt);
-      let nx = dx/d, ny = dy/d;
-      const m = MODES[state.mode];
-      const wob = (m.flutter ? 150 : 55) * Math.sin(clock * (m.flutter ? 9 : 16)) * c.dir;
-      c.x += nx*step + (-ny)*wob*dt;
-      c.y += ny*step + ( nx)*wob*dt;
-      if (Math.abs(nx) > .25) c.face = nx > 0 ? 1 : -1;
-      c.ph += dt * 22;
+/* ================= hand-drawn critters (local coords: origin = base, up is -y, ~170px tall) ================= */
+function lin(g, y0, y1, a, b){ const k = g.createLinearGradient(0, y0, 0, y1); k.addColorStop(0, a); k.addColorStop(1, b); return k; }
+function ell(g, x, y, rx, ry, fill, rot = 0){ g.fillStyle = fill; g.beginPath(); g.ellipse(x, y, rx, ry, rot, 0, TAU); g.fill(); }
+function eye(g, x, y, r, blink){
+  if (blink > .6){ g.strokeStyle = '#1b1210'; g.lineWidth = 3; g.lineCap = 'round';
+    g.beginPath(); g.arc(x, y, r*.8, .15*Math.PI, .85*Math.PI); g.stroke(); return; }
+  ell(g, x, y, r, r * (1 - blink), '#1b1210');
+  ell(g, x + r*.35, y - r*.35, r*.35, r*.35, '#fff');
+}
+function halo(g){
+  const k = g.createRadialGradient(0, -80, 10, 0, -80, 130);
+  k.addColorStop(0, 'rgba(255,236,190,.55)'); k.addColorStop(1, 'rgba(255,220,150,0)');
+  g.fillStyle = k; g.beginPath(); g.arc(0, -80, 130, 0, TAU); g.fill();   // projectors can't show black: lift dark critters
+}
+
+function drawSquirrel(g, t, o){
+  g.save(); g.translate(54, -18); g.rotate(.3 + Math.sin(t*2.6)*.12);              // fluffy tail
+  ell(g, 0, -72, 38, 86, lin(g, 0, -160, '#b4561f', '#ee9444'));
+  ell(g, -9, -92, 13, 52, 'rgba(255,216,150,.55)');
+  g.restore();
+  ell(g, 0, -34, 47, 62, lin(g, -90, 20, '#c2682b', '#8f4318'));                    // body
+  ell(g, 0, -26, 27, 44, '#f6dcb0');                                                // belly
+  const lx = o.look * 5;
+  ell(g, lx - 31, -132, 14, 15, '#b85a22'); ell(g, lx + 31, -132, 14, 15, '#b85a22');   // ears
+  ell(g, lx - 31, -131, 7, 8, '#f2a98a');   ell(g, lx + 31, -131, 7, 8, '#f2a98a');
+  ell(g, lx, -98, 47, 40, lin(g, -140, -58, '#d07a34', '#bd6126'));                // head
+  ell(g, lx, -84, 32, 24, '#f6dcb0');                                               // muzzle
+  eye(g, lx - 18, -104, 7.5, o.blink); eye(g, lx + 18, -104, 7.5, o.blink);
+  ell(g, lx - 30, -88, 8, 5, 'rgba(255,130,120,.45)'); ell(g, lx + 30, -88, 8, 5, 'rgba(255,130,120,.45)');
+  ell(g, lx, -92, 5.5, 4, '#3a2016');
+  g.fillStyle = '#fff'; g.strokeStyle = '#7a5a40'; g.lineWidth = 1.5;                // buck teeth
+  g.beginPath(); g.roundRect(lx - 6, -86, 12, 11, 2); g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(lx, -86); g.lineTo(lx, -75); g.stroke();
+  ell(g, -17, -48, 10, 8, '#8a4217'); ell(g, 17, -48, 10, 8, '#8a4217');           // paws
+  ell(g, 0, -52, 13, 11, '#a8742c'); ell(g, 0, -60, 13, 6, '#5b3a1a');             // acorn
+}
+function drawMole(g, t, o){
+  const lx = o.look * 5;
+  ell(g, 0, -34, 52, 64, lin(g, -100, 20, '#6b5f7d', '#463d56'));
+  ell(g, lx, -92, 46, 40, lin(g, -135, -55, '#7a6d8d', '#5a4e6b'));
+  eye(g, lx - 24, -102, 4.5, o.blink); eye(g, lx + 24, -102, 4.5, o.blink);
+  g.fillStyle = '#ff9eb5';                                                          // star-nose
+  for (let i = 0; i < 9; i++){ const a = i / 9 * TAU + Math.sin(t*5)*.08;
+    g.beginPath(); g.ellipse(lx + Math.cos(a)*14, -82 + Math.sin(a)*12, 4.5, 4.5, 0, 0, TAU); g.fill(); }
+  ell(g, lx, -82, 11, 10, '#ff7f9f');
+  ell(g, lx, -66, 18, 9, '#8d809d');
+  g.fillStyle = '#f2b9a8';
+  for (const s of [-1, 1]){
+    ell(g, s * 46, -34, 22, 14, '#f2b9a8', s * .4);
+    g.strokeStyle = '#fff6e6'; g.lineWidth = 4; g.lineCap = 'round';
+    for (let k = -1; k <= 1; k++){ g.beginPath(); g.moveTo(s*(52+k*2), -34 + k*9); g.lineTo(s*(66+k*2), -34 + k*12); g.stroke(); }
+  }
+}
+function drawBunny(g, t, o){
+  const lx = o.look * 5, sw = Math.sin(t*2.2) * .06;
+  for (const s of [-1, 1]){
+    g.save(); g.translate(lx + s*22, -128); g.rotate(s*.18 + sw*s);
+    ell(g, 0, -34, 15, 48, '#f6eee6'); ell(g, 0, -30, 8, 36, '#f5b6c0');
+    g.restore();
+  }
+  ell(g, 0, -34, 46, 62, lin(g, -90, 20, '#fbf4ec', '#d9cabb'));
+  ell(g, lx, -96, 46, 40, '#fbf4ec');
+  eye(g, lx - 19, -102, 6.5, o.blink); eye(g, lx + 19, -102, 6.5, o.blink);
+  ell(g, lx - 29, -86, 8, 5, 'rgba(255,140,150,.5)'); ell(g, lx + 29, -86, 8, 5, 'rgba(255,140,150,.5)');
+  ell(g, lx, -90, 6, 4.5, '#f08fa0');
+  g.strokeStyle = '#c9b8a8'; g.lineWidth = 1.5;
+  for (const s of [-1, 1]) for (let k = -1; k <= 1; k++){ g.beginPath(); g.moveTo(lx + s*14, -86 + k*3); g.lineTo(lx + s*42, -88 + k*8); g.stroke(); }
+  g.fillStyle = '#fff'; g.strokeStyle = '#bba'; g.beginPath(); g.roundRect(lx - 6, -85, 12, 11, 2); g.fill(); g.stroke();
+  ell(g, -16, -46, 10, 8, '#efe3d6'); ell(g, 16, -46, 10, 8, '#efe3d6');
+}
+function drawOrb(g, t){
+  const r = 44 + Math.sin(t*6) * 3;
+  const k = g.createRadialGradient(0, -52, 2, 0, -52, r * 2);
+  k.addColorStop(0, '#fff'); k.addColorStop(.22, '#ffe84a'); k.addColorStop(1, 'rgba(255,200,0,0)');
+  g.fillStyle = k; g.beginPath(); g.arc(0, -52, r * 2, 0, TAU); g.fill();
+}
+const KINDS = {
+  squirrel: { draw: drawSquirrel, emoji: '🐿️', label: 'Squirrel' },
+  mole:     { draw: drawMole,     emoji: '🐭',  label: 'Mole' },
+  bunny:    { draw: drawBunny,    emoji: '🐰',  label: 'Bunny' },
+  dot:      { draw: drawOrb,      emoji: null,  label: 'Glow dot' },
+};
+const KIND_ORDER = Object.keys(KINDS);
+
+/* ================= burrow game (whack-a-mole style) ================= */
+const LAYOUT = [[250,215],[640,165],[1030,225],[420,520],[860,545]];
+const holes = LAYOUT.map(([x, y], i) => {
+  const s = .78 + .42 * (y / H);
+  const pebbles = Array.from({ length: 26 }, (_, k) => ({ a: k / 26 * TAU + rnd(-.08, .08), w: rnd(9, 19), h: rnd(6, 11), r: rnd(0, .4) }));
+  const tufts = [-2.5, -2.0, -1.0, -.55].map((a, k) => ({ a: a + rnd(-.1, .1), n: 4 + (k % 2), len: rnd(34, 52) }));
+  return { x, y, s, rx: 122 * s, ry: 46 * s, pebbles, tufts, rustle: 0, glow: 0, id: i };
+});
+const B = { hole: null, last: -1, ph: 'idle', t: .8, p: 0, max: 1, hold: 0, look: 0, lookTo: 0, lookT: 0, blink: 0, blinkT: 2, caught: 0, shake: 0 };
+const easeOutBack = x => { const c1 = 2.3, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const sp = () => state.speed;
+
+function pickHole(){
+  const cands = holes.filter(h => h.id !== B.last);
+  const from = B.hole || holes[2];
+  cands.sort((a, b) => Math.hypot(b.x - from.x, b.y - from.y) - Math.hypot(a.x - from.x, a.y - from.y));
+  return cands[Math.floor(Math.random() * Math.min(3, cands.length))];   // favour far holes so the dog has to run
+}
+function popY(h){ return h.y - 80 * h.s * Math.min(1, B.p); }
+function catchIt(){
+  if (state.game === 'roam') return roamCatch();
+  if (B.caught > 0 || !B.hole || (B.ph !== 'rise' && B.ph !== 'up')) return;
+  B.ph = 'caught'; B.caught = .9; B.p = Math.max(B.p, .8);
+  burstStars(B.hole.x, popY(B.hole)); ring(B.hole.x, B.hole.y, '255,230,90'); toast('Caught! Treat time');
+}
+function updateBurrow(dt){
+  const s = sp();
+  B.blinkT -= dt; if (B.blinkT <= 0){ B.blink = 1; B.blinkT = rnd(1.5, 3.5); }
+  B.blink = Math.max(0, B.blink - dt * 8);
+  B.lookT -= dt; if (B.lookT <= 0){ B.lookTo = rnd(-1, 1); B.lookT = rnd(.5, 1.2); }
+  B.look += (B.lookTo - B.look) * Math.min(1, dt * 8);
+  for (const h of holes){ h.rustle = Math.max(0, h.rustle - dt * 3); h.glow += ((h === B.hole && B.ph !== 'idle' ? 1 : .35) - h.glow) * Math.min(1, dt * 6); }
+
+  if (B.ph === 'idle'){
+    B.t -= dt; if (B.t <= 0){ B.hole = pickHole(); B.last = B.hole.id; B.ph = 'rustle'; B.t = .55 / s; B.p = 0; }
+  } else if (B.ph === 'rustle'){
+    B.hole.rustle = 1; B.t -= dt;
+    if (Math.random() < dt * 14) dirt(B.hole.x, B.hole.y, 1);
+    if (B.t <= 0){ B.ph = 'rise'; B.q = 0; B.max = Math.random() < .22 ? .5 : 1; B.hold = (B.max < 1 ? .3 : rnd(.9, 1.9)) / s; dirt(B.hole.x, B.hole.y, 12); }
+  } else if (B.ph === 'rise'){
+    B.q += dt / (.24 / s); B.p = easeOutBack(Math.min(1, B.q)) * B.max;
+    if (B.q >= 1){ B.ph = 'up'; B.p = B.max; }
+  } else if (B.ph === 'up'){
+    B.hold -= dt; if (B.hold <= 0){ B.ph = 'fall'; B.q = 1; }
+  } else if (B.ph === 'caught'){
+    B.caught -= dt; if (B.caught <= 0){ B.ph = 'fall'; B.q = 1; }
+  } else if (B.ph === 'fall'){
+    B.q -= dt / (.2 / s); B.p = Math.max(0, B.q) * Math.max(.5, B.max);
+    if (B.q <= 0){ B.p = 0; B.ph = 'idle'; B.t = (Math.random() < .25 ? .15 : rnd(.35, 1.2)) / s; dirt(B.hole.x, B.hole.y, 5); }
+  }
+}
+
+function drawHole(h, withCritter){
+  const g = ctx, { x, y, rx, ry } = h, glow = h.glow, pulse = .75 + Math.sin(clock*3 + h.id) * .15;
+  g.save(); g.translate(x, y);
+  // dark hollow
+  const hg = g.createRadialGradient(0, 0, 6, 0, 0, rx);
+  hg.addColorStop(0, '#0a0503'); hg.addColorStop(1, '#3d2610');
+  g.fillStyle = hg; g.beginPath(); g.ellipse(0, 0, rx, ry, 0, 0, TAU); g.fill();
+  // back rim + back pebbles + back grass
+  g.lineCap = 'round'; g.shadowColor = '#ffa500'; g.shadowBlur = (18 + 26 * glow) * pulse;
+  g.strokeStyle = `rgba(255,190,50,${.75 + .25*glow})`; g.lineWidth = 9 * h.s;
+  g.beginPath(); g.ellipse(0, 0, rx + 5, ry + 3, 0, Math.PI, TAU); g.stroke();
+  for (const p of h.pebbles) if (Math.sin(p.a) < 0) pebble(g, h, p);
+  for (const tf of h.tufts) tuft(g, h, tf);
+  g.shadowBlur = 0;
+
+  if (withCritter){
+    const kind = KINDS[state.kind], sc = h.s, pop = B.p;
+    g.save();
+    g.beginPath(); g.rect(-rx - 60, -400, 2 * rx + 120, 400 + ry * .45); g.clip();       // hide whatever is below the front lip
+    g.translate(0, (1 - pop) * 190 * sc);
+    const wig = B.ph === 'up' ? Math.sin(clock * 5) * .05 : 0;
+    const stretch = B.ph === 'rise' ? 1 + (1 - Math.min(1, B.q)) * .14 : 1 + Math.sin(clock * 3) * .015;
+    let squash = 1;
+    if (B.ph === 'caught'){ squash = 1 - Math.abs(Math.sin(B.caught * 14)) * .12; }
+    g.scale(sc * (2 - stretch) * (B.ph === 'caught' ? 1.06 : 1), sc * stretch * squash);
+    g.rotate(wig);
+    if (state.kind !== 'dot') halo(g);
+    kind.draw(g, clock, { look: B.ph === 'caught' ? 0 : B.look, blink: B.ph === 'caught' ? 1 : B.blink });
+    g.restore();
+    if (B.ph === 'caught'){                                                              // dizzy stars
+      g.fillStyle = '#ffd84a'; g.shadowColor = '#ffb000'; g.shadowBlur = 12;
+      for (let i = 0; i < 4; i++){ const a = clock * 6 + i * TAU / 4; star(g, Math.cos(a) * 52 * sc, -150 * sc + Math.sin(a) * 14, 11, a); }
+      g.shadowBlur = 0;
     }
   }
-  c.x = Math.min(W-60, Math.max(60, c.x)); c.y = Math.min(H-60, Math.max(60, c.y));
-  for (const p of puffs){ p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt*1.6; }
-  for (const s of stars){ s.x += Math.cos(s.a)*s.v*dt; s.y += Math.sin(s.a)*s.v*dt; s.life -= dt*1.2; }
-  while (puffs.length && puffs[0].life <= 0) puffs.shift();
-  while (stars.length && stars[0].life <= 0) stars.shift();
+  // front pebbles + front rim sit over the critter
+  g.shadowColor = '#ffa500'; g.shadowBlur = (18 + 26 * glow) * pulse;
+  g.strokeStyle = `rgba(255,190,50,${.75 + .25*glow})`; g.lineWidth = 9 * h.s; g.lineCap = 'round';
+  g.beginPath(); g.ellipse(0, 0, rx + 5, ry + 3, 0, 0, Math.PI); g.stroke();
+  for (const p of h.pebbles) if (Math.sin(p.a) >= 0) pebble(g, h, p);
+  g.shadowBlur = 0; g.restore();
+}
+function pebble(g, h, p){
+  const px_ = Math.cos(p.a) * (h.rx + 6), py_ = Math.sin(p.a) * (h.ry + 3);
+  g.save(); g.translate(px_, py_); g.rotate(p.a * .5 + p.r);
+  g.fillStyle = '#fff0cf'; g.strokeStyle = 'rgba(255,175,30,.9)'; g.lineWidth = 2;
+  g.beginPath(); g.ellipse(0, 0, p.w * h.s, p.h * h.s, 0, 0, TAU); g.fill(); g.stroke();
+  g.fillStyle = 'rgba(255,255,255,.7)'; g.beginPath(); g.ellipse(-p.w * .25 * h.s, -p.h * .3 * h.s, p.w * .3 * h.s, p.h * .25 * h.s, 0, 0, TAU); g.fill();
+  g.restore();
+}
+function tuft(g, h, tf){
+  const bx = Math.cos(tf.a) * (h.rx + 4), by = Math.sin(tf.a) * (h.ry + 2);
+  g.strokeStyle = '#b8f24c'; g.lineWidth = 3.5 * h.s; g.lineCap = 'round';
+  g.shadowColor = '#7dd321'; g.shadowBlur = 10;
+  for (let i = 0; i < tf.n; i++){
+    const spread = (i - (tf.n - 1) / 2) * 11 * h.s, len = tf.len * h.s * (.8 + (i % 2) * .3);
+    const sway = Math.sin(clock * 1.8 + h.id + i) * 4 * h.s + h.rustle * Math.sin(clock * 34 + i * 2) * 9 * h.s;
+    g.beginPath(); g.moveTo(bx + spread * .3, by);
+    g.quadraticCurveTo(bx + spread * .6 + sway * .4, by - len * .55, bx + spread + sway, by - len); g.stroke();
+  }
+  g.shadowColor = '#ffa500';
 }
 
-const BGS = [null, ['#0d1f12', '#050b07']];            // black, dim forest
+/* ================= roam mode (a critter that scampers around the whole area) ================= */
+const R = { x: W/2, y: H/2, tx: W/2, ty: H/2, st: 'idle', t: 1, sp: 0, face: -1, ph: 0, caught: 0, dir: 1 };
+function rPick(){ const m = 130; let t = 0, x, y;
+  do { x = rnd(m, W-m); y = rnd(m, H-m); } while (Math.hypot(x-R.x, y-R.y) < 280 && t++ < 25); R.tx = x; R.ty = y; }
+function rDash(){ rPick(); R.st = 'dash'; R.sp = rnd(420, 880) * state.speed; R.dir = Math.random() < .5 ? -1 : 1; dirt(R.x, R.y + 40, 6); }
+function roamFlee(fx, fy){ const a = Math.atan2(R.y - fy, R.x - fx) + rnd(-.4, .4), d = rnd(420, 670);
+  R.tx = Math.min(W-110, Math.max(110, R.x + Math.cos(a)*d)); R.ty = Math.min(H-110, Math.max(110, R.y + Math.sin(a)*d));
+  R.st = 'dash'; R.sp = 950 * state.speed; dirt(R.x, R.y + 40, 8); }
+function roamCatch(){ if (R.caught > 0) return; R.caught = 1.4; burstStars(R.x, R.y); ring(R.x, R.y + 40, '255,230,90'); toast('Caught! Treat time'); }
+function updateRoam(dt){
+  if (R.caught > 0){ R.caught -= dt;
+    if (R.caught <= 0){ R.x = rnd(130, W-130); R.y = rnd(130, H-130); R.st = 'idle'; R.t = 1.2; dirt(R.x, R.y + 40, 10); }
+  } else if (R.st === 'idle'){ R.t -= dt; if (R.t <= 0) rDash(); }
+  else {
+    const dx = R.tx - R.x, dy = R.ty - R.y, d = Math.hypot(dx, dy);
+    if (d < 14){ R.st = 'idle'; R.t = Math.random() < .3 ? .12 : rnd(.35, 1.85); }
+    else {
+      const step = Math.min(d, R.sp * Math.min(1, .3 + d / 220) * dt), nx = dx / d, ny = dy / d;
+      const wob = 55 * Math.sin(clock * 16) * R.dir;
+      R.x += nx * step - ny * wob * dt; R.y += ny * step + nx * wob * dt;
+      if (Math.abs(nx) > .25) R.face = nx > 0 ? 1 : -1;
+      R.ph += dt * 22;
+    }
+  }
+  R.x = Math.min(W-60, Math.max(60, R.x)); R.y = Math.min(H-60, Math.max(60, R.y));
+}
+function drawRoam(){
+  if (R.caught > 0) return;
+  const k = KINDS[state.kind], moving = R.st === 'dash', bob = moving ? Math.abs(Math.sin(R.ph)) * 14 : Math.sin(clock*7) * 2;
+  ctx.save(); ctx.translate(R.x, R.y - bob);
+  if (!k.emoji){ drawOrb(ctx, clock); ctx.restore(); return; }
+  const hg = ctx.createRadialGradient(0, 0, 14, 0, 0, 150);
+  hg.addColorStop(0, 'rgba(255,236,190,.85)'); hg.addColorStop(.55, 'rgba(255,220,150,.4)'); hg.addColorStop(1, 'rgba(255,220,150,0)');
+  ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(0, 0, 150, 0, TAU); ctx.fill();
+  ctx.rotate(moving ? Math.sin(R.ph * .5) * .07 : 0); ctx.scale(-R.face, 1);
+  ctx.font = '170px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(k.emoji, 0, 0);
+  ctx.restore();
+}
+
+/* ================= main loop ================= */
+const BGS = [null, ['#0d1f12', '#050b07']];
 function draw(){
-  ctx.clearRect(0,0,W,H);
+  ctx.clearRect(0, 0, W, H);
   const bg = BGS[state.bg % BGS.length];
-  if (bg){
-    const g = ctx.createRadialGradient(W/2,H/2,80,W/2,H/2,W*.65);
-    g.addColorStop(0,bg[0]); g.addColorStop(1,bg[1]); ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
-  }
-  for (const p of puffs){
-    ctx.globalAlpha = Math.max(0, p.life) * .35; ctx.fillStyle = '#cdb98a';
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1.4 - p.life*.4), 0, 6.283); ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-  const m = MODES[state.mode];
-  if (c.caught <= 0){
-    const moving = c.st === 'dash';
-    const bob = moving ? Math.abs(Math.sin(c.ph)) * 14 : Math.sin(clock*7) * 2;
-    ctx.save(); ctx.translate(c.x, c.y);
-    if (m.emoji){
-      // projectors can't show black: a soft warm halo makes dark emoji pop on a wall
-      const hg = ctx.createRadialGradient(0,-bob,m.size*.1,0,-bob,m.size*.85);
-      hg.addColorStop(0,'rgba(255,236,190,.85)'); hg.addColorStop(.55,'rgba(255,220,150,.45)'); hg.addColorStop(1,'rgba(255,220,150,0)');
-      ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(0,-bob,m.size*.85,0,6.283); ctx.fill();
-      ctx.translate(0, -bob);
-      ctx.rotate(moving ? Math.sin(c.ph*.5)*.07 : 0);
-      ctx.scale(-c.face, 1);                           // emoji faces left by default
-      if (!moving) ctx.scale(1 + Math.sin(clock*9)*.015, 1);
-      ctx.font = `${m.size}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(m.emoji, 0, 0);
-    } else {
-      const r = m.size;
-      const g = ctx.createRadialGradient(0,0,2,0,0,r);
-      g.addColorStop(0,'#fff'); g.addColorStop(.25,'#ffe84a'); g.addColorStop(1,'rgba(255,200,0,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0,0,r,0,6.283); ctx.fill();
-    }
-    ctx.restore();
-  }
-  for (const s of stars){
-    ctx.globalAlpha = Math.max(0, s.life); ctx.font = '44px "Apple Color Emoji","Segoe UI Emoji",sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('⭐', s.x, s.y);
-  }
-  ctx.globalAlpha = 1;
+  if (bg){ const g = ctx.createRadialGradient(W/2, H/2, 80, W/2, H/2, W*.65);
+    g.addColorStop(0, bg[0]); g.addColorStop(1, bg[1]); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
+  if (state.game === 'burrow'){
+    for (const h of [...holes].sort((a, b) => a.y - b.y)) drawHole(h, h === B.hole && B.ph !== 'idle' && B.ph !== 'rustle');
+  } else drawRoam();
+  drawFx();
+}
+function update(dt){
+  clock += dt; updateFx(dt);
+  state.game === 'burrow' ? updateBurrow(dt) : updateRoam(dt);
 }
 
-/* ---------- UI: keys, taps, HUD ---------- */
+/* ================= UI ================= */
 let toastTimer;
 function toast(t){ toastEl.textContent = t; toastEl.classList.add('on'); clearTimeout(toastTimer);
                    toastTimer = setTimeout(() => toastEl.classList.remove('on'), 1600); }
 function setHud(){
-  hud.innerHTML = `<b>${MODES[state.mode].label}</b> · speed ${state.speed.toFixed(2)}×<br>
-    1–5 critter · ↑/↓ speed · B background · R catch + reward · C calibrate · F fullscreen · H hide this<br>
-    Tap the screen to scare it off; tap the critter to “catch” it.`;
+  hud.innerHTML = `<b>${state.game === 'burrow' ? 'Burrows' : 'Roam'}</b> · ${KINDS[state.kind].label} · speed ${state.speed.toFixed(1)}×<br>
+    M game mode · 1–4 critter · ↑/↓ speed · B background · R catch + reward · C calibrate · F fullscreen · H hide this<br>
+    Tap the critter to “catch” it.`;
 }
 let hudTimer;
-function showHud(){ hud.classList.remove('hide'); clearTimeout(hudTimer);
-                    hudTimer = setTimeout(() => hud.classList.add('hide'), 6000); }
-
-function setCal(on){
-  document.body.classList.toggle('cal', on);
-  document.body.classList.toggle('nocursor', !on);
-  if (!on) save();
-}
+function showHud(){ hud.classList.remove('hide'); clearTimeout(hudTimer); hudTimer = setTimeout(() => hud.classList.add('hide'), 6000); }
+function setCal(on){ document.body.classList.toggle('cal', on); document.body.classList.toggle('nocursor', !on); if (!on) save(); }
 
 addEventListener('keydown', e => {
   const k = e.key, cal = document.body.classList.contains('cal');
   if (k === 'c' || k === 'C' || (k === 'Enter' && cal)){ setCal(!cal); return; }
   if (cal && k.startsWith('Arrow')){
-    const st = (e.shiftKey ? 10 : 1);
-    const dx = k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0;
-    const dy = k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0;
-    corners[sel][0] += dx / innerWidth; corners[sel][1] += dy / innerHeight;
+    const st = e.shiftKey ? 10 : 1;
+    corners[sel][0] += (k === 'ArrowLeft' ? -st : k === 'ArrowRight' ? st : 0) / innerWidth;
+    corners[sel][1] += (k === 'ArrowUp' ? -st : k === 'ArrowDown' ? st : 0) / innerHeight;
     applyTransform(); save(); e.preventDefault(); return;
   }
   if (cal && '1234'.includes(k) && e.altKey){ sel = +k - 1; markSel(); return; }
-  if (/^[1-5]$/.test(k) && !cal){ state.mode = ORDER[+k - 1]; toast(MODES[state.mode].label); save(); }
-  else if (k === 'ArrowUp' || k === '+' || k === '='){ state.speed = Math.min(2.5, state.speed + .1); toast(`Speed ${state.speed.toFixed(1)}×`); save(); }
-  else if (k === 'ArrowDown' || k === '-'){ state.speed = Math.max(.3, state.speed - .1); toast(`Speed ${state.speed.toFixed(1)}×`); save(); }
-  else if (k === 'b' || k === 'B'){ state.bg++; save(); }
-  else if (k === 'r' || k === 'R'){ caught(); }
+  if (cal && k === 'Escape'){ setCal(false); return; }
+  if (/^[1-4]$/.test(k)){ state.kind = KIND_ORDER[+k - 1]; toast(KINDS[state.kind].label); }
+  else if (k === 'm' || k === 'M'){ state.game = state.game === 'burrow' ? 'roam' : 'burrow'; toast(state.game === 'burrow' ? 'Burrows' : 'Roam'); }
+  else if (k === 'ArrowUp' || k === '+' || k === '='){ state.speed = Math.min(2.5, +(state.speed + .1).toFixed(1)); toast(`Speed ${state.speed.toFixed(1)}×`); }
+  else if (k === 'ArrowDown' || k === '-'){ state.speed = Math.max(.3, +(state.speed - .1).toFixed(1)); toast(`Speed ${state.speed.toFixed(1)}×`); }
+  else if (k === 'b' || k === 'B'){ state.bg++; }
+  else if (k === 'r' || k === 'R'){ catchIt(); }
   else if (k === 'f' || k === 'F'){ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
   else if (k === 'h' || k === 'H'){ hud.classList.toggle('hide'); clearTimeout(hudTimer); return; }
-  else if (k === 'Escape' && cal){ setCal(false); }
-  setHud(); showHud();
+  save(); setHud(); showHud();
 });
-
 addEventListener('pointerdown', e => {
   if (document.body.classList.contains('cal')) return;
   const [sx, sy] = screenToStage(e.clientX, e.clientY);
-  if (Math.hypot(sx - c.x, sy - c.y) < 130) caught(); else flee(sx, sy);
+  if (state.game === 'burrow'){
+    if (B.hole && (B.ph === 'rise' || B.ph === 'up') && Math.hypot(sx - B.hole.x, sy - popY(B.hole)) < 120 * B.hole.s) catchIt();
+    else ring(sx, sy);
+  } else {
+    if (Math.hypot(sx - R.x, sy - R.y) < 130) roamCatch(); else roamFlee(sx, sy);
+  }
 });
 let moveTimer;
 addEventListener('pointermove', () => {
@@ -309,15 +479,13 @@ addEventListener('pointermove', () => {
 });
 addEventListener('resize', applyTransform);
 
-/* ---------- go ---------- */
-if (!ORDER.includes(state.mode)) state.mode = 'squirrel';
+if (!KINDS[state.kind]) state.kind = 'squirrel';
+if (state.game !== 'roam') state.game = 'burrow';
 if (!document.body.classList.contains('cal')) document.body.classList.add('nocursor');
 applyTransform(); setHud(); showHud();
 let last = performance.now();
-(function loop(now){
-  const dt = Math.min(.05, (now - last) / 1000); last = now;
-  update(dt); draw(); requestAnimationFrame(loop);
-})(last);
+(function loop(now){ const dt = Math.min(.05, (now - last) / 1000); last = now; update(dt); draw(); requestAnimationFrame(loop); })(last);
+window.__dbg = { B, holes, state };   // handy for poking at it in devtools
 })();
 </script>
 </body>
